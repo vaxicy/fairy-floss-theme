@@ -2,9 +2,15 @@
 # -*- coding: utf-8 -*-
 """Fairy Floss Theme — promo tiles (440x280 + 1400x560), all English.
 
-Colours are read from manifest.json. Five palette blocks sit on a shelf across
-the full width; each canvas keeps its own geometry and font scale, with bounds
-assertions so overflow fails loudly at generation time.
+Two different presentation styles, one per size (user request 2026-10-23):
+
+  1400x560 · full-bleed stripes — the palette itself becomes the background,
+             so the tile needs no separate swatch strip.
+  440x280  · dot palette      — centred stack with six colour dots; the small
+             tile stays airy instead of packing blocks into 440px.
+
+Colours are read from manifest.json. Every layout ends with bounds assertions so
+overflow fails loudly at generation time rather than shipping a broken tile.
 """
 import json
 import os
@@ -17,14 +23,17 @@ ROOT = Path(__file__).resolve().parent.parent
 os.chdir(str(ROOT))                      # relative paths only (non-ASCII path safety)
 
 OUT_DIR = "store-assets/promo"
+INK = (34, 48, 58)
+WHITE = (255, 255, 255)
+SHELL = (255, 253, 246)
+
+with open("manifest.json", "r", encoding="utf-8") as f:
+    _m = json.load(f)
+_C, _P = _m["theme"]["colors"], _m["theme"]["properties"]
 
 
 def save_png(img, path, tries=5):
-    """PIL intermittently raises OSError [Errno 22] on this non-ASCII project path.
-
-    Observed on Windows: the very same save() succeeds on one run and fails on the
-    next, so retry a few times instead of crashing the whole generation.
-    """
+    """PIL intermittently raises OSError [Errno 22] on this non-ASCII path."""
     last = None
     for i in range(tries):
         try:
@@ -37,12 +46,18 @@ def save_png(img, path, tries=5):
 
 
 def rgb(vals):
-    return tuple(vals)
+    return (vals[0], vals[1], vals[2])
+
+
+def hex2rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
 
 def font(size, bold=False):
+    win = os.environ.get("WINDIR", r"C:\Windows")
     for name in (("segoeuib.ttf", "seguisb.ttf") if bold else ("segoeui.ttf", "segoeuisl.ttf")):
-        p = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", name)
+        p = os.path.join(win, "Fonts", name)
         if os.path.exists(p):
             return ImageFont.truetype(p, size)
     return ImageFont.load_default()
@@ -56,141 +71,136 @@ def lerp(a, b, t):
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def bg_gradient(size, top, bottom):
-    w, h = size
-    img = Image.new("RGB", (w, h))
-    d = ImageDraw.Draw(img)
-    for y in range(h):
-        d.line([(0, y), (w, y)], fill=lerp(top, bottom, y / max(1, h - 1)))
-    return img
-
-
-def draw_chip(d, x, y, h, label, f, fill, txt, pad=18):
+def draw_chip(d, x, y, h, label, f, fill, txt, pad=16):
     w = text_w(d, label, f) + pad * 2
     d.rounded_rectangle([x, y, x + w, y + h], radius=h // 2, fill=fill)
     d.text((x + pad, y + (h - f.size) // 2 - 3), label, font=f, fill=txt)
     return w
 
 
-def compose(size, geom, colors, props):
+# ------------------------------------------------------- 1400x560: stripes
+def compose_bands(size=(1400, 560)):
     W, H = size
-    M = geom["margin"]
+    M = 70
     RIGHT = W - M
 
-    img = bg_gradient(size, rgb(colors["ntp_background"]), rgb(colors["button_background"]))
+    stripe_colors = [
+        rgb(_C["button_background"]),             # sky
+        rgb(_C["button_background_secondary"]),   # mint
+        SHELL,                                    # shell
+        rgb(_C["ntp_background"]),                # cream
+        rgb(_C["frame"]),                         # blush
+        rgb(_C["toolbar"]),                       # lilac
+    ]
+    img = Image.new("RGB", (W, H), stripe_colors[0])
     d = ImageDraw.Draw(img)
+    n = len(stripe_colors)
+    sw = W / n
+    lean = W * 0.05
+    for i, col in enumerate(stripe_colors):
+        # stripes overlap so the lean never exposes the base fill at the edges
+        x0 = i * sw - sw * 0.14
+        x1 = x0 + sw * 1.30
+        d.polygon([(x0 + lean, -2), (x1 + lean, -2), (x1 - lean, H + 2), (x0 - lean, H + 2)],
+                  fill=col)
 
-    ink = rgb(colors["ntp_text"])
-    sub = lerp(ink, rgb(colors["ntp_background"]), 0.34)
-    chip_bg = rgb(colors["ntp_header"])
-    cta_bg = rgb(colors["frame"])
-    cta_txt = rgb(colors["tab_text"])
-
-    # palette strip: one long band across the full width, split into segments
-    # (user request 2026-10-20: long strips instead of a tile grid, so the
-    #  composition no longer leaves the left side empty)
-    # big palette blocks spread across the full width (user request 2026-10-20:
-    # larger, blocky, distributed — not crowded on the right). Five distinct
-    # colours ordered pale -> deep, sitting on a shelf under the text column.
-    block_colors = [rgb(colors["ntp_background"]), rgb(colors["button_background_secondary"]),
-                    rgb(colors["frame"]), rgb(props["ntp_button_background"]),
-                    rgb(colors["ntp_link"])]
-    n = len(block_colors)
-    row_y, row_h, bgap = geom["row_y"], geom["row_h"], geom["row_gap"]
-    bw = (RIGHT - M - bgap * (n - 1)) / n
-    radius = min(bw, row_h) * 0.22
-    assert bw > row_h * 0.8, "blocks should read as blocks, not thin strips"
-    assert row_y + row_h <= H - 14, "block row too close to the canvas bottom"
-    assert row_y >= geom["cta_y"] + geom["cta_h"] + 8, "block row overlaps the CTA"
-
-    # a very soft shadow keeps the palest blocks readable against a same-hue
-    # background without drawing an outline
+    # logo sits on a white tile so it never melts into a same-hue stripe
+    tile = 140
     shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    x = M
-    for _ in block_colors:
-        sd.rounded_rectangle([x, row_y + 5, x + bw, row_y + row_h + 5],
-                             radius=radius, fill=ink + (28,))
-        x += bw + bgap
-    shadow = shadow.filter(ImageFilter.GaussianBlur(7))
+    sd.rounded_rectangle([M, 60, M + tile, 60 + tile], radius=34, fill=INK + (38,))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(10))
     img = Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB")
     d = ImageDraw.Draw(img)
+    d.rounded_rectangle([M, 56, M + tile, 56 + tile], radius=34, fill=WHITE)
+    logo = Image.open("logo/logo.png").convert("RGBA").resize((100, 100), Image.LANCZOS)
+    img.paste(logo, (M + 20, 76), logo)
+    d = ImageDraw.Draw(img)
 
-    x = M
-    for col in block_colors:
-        d.rounded_rectangle([x, row_y, x + bw, row_y + row_h], radius=radius, fill=col)
-        x += bw + bgap
-    assert x - bgap <= RIGHT + 0.5, "palette blocks overflow the right margin"
+    f_title, f_sub = font(60, True), font(21)
+    tx = M + tile + 34
+    ty = 74
+    d.text((tx, ty), "Fairy Floss", font=f_title, fill=INK)
+    d.text((tx, ty + 76), "A soft pastel Chrome theme", font=f_sub,
+           fill=lerp(INK, WHITE, 0.18))
+    assert tx + text_w(d, "Fairy Floss", f_title) <= RIGHT - 20, "title overflows"
 
-    lsize = geom["logo"]
+    f_chip = font(15)
+    cx, cy = tx, ty + 116
+    for label in ("Solid colors", "Pastel palette", "Easy on the eyes"):
+        cx += draw_chip(d, cx, cy, 34, label, f_chip, WHITE, INK) + 12
+    assert cx - 12 <= RIGHT, "chip row overflows"
+
+    f_cta = font(20, True)
+    cw, ch = 210, 54
+    bx, by = RIGHT - cw, H - M - ch
+    d.rounded_rectangle([bx, by, bx + cw, by + ch], radius=ch // 2, fill=INK)
+    label = "Try It Now"
+    d.text((bx + (cw - text_w(d, label, f_cta)) // 2, by + (ch - f_cta.size) // 2 - 3),
+           label, font=f_cta, fill=SHELL)
+    assert by > cy + 34 + 8, "CTA collides with the chip row"
+    return img, {"cta": (bx, by, cw, ch), "logo_tile": (M, 56, tile, tile)}
+
+
+# ------------------------------------------------------- 440x280: dot palette
+def compose_dots(size=(440, 280)):
+    W, H = size
+    M = 28
+    bg = rgb(_C["ntp_background"])
+    img = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(img)
+
+    lsize = 60
     logo = Image.open("logo/logo.png").convert("RGBA").resize((lsize, lsize), Image.LANCZOS)
-    img.paste(logo, (M, geom["logo_y"]), logo)
+    img.paste(logo, ((W - lsize) // 2, 22), logo)
+    d = ImageDraw.Draw(img)
 
-    f_title, f_sub = font(geom["title_size"], True), font(geom["sub_size"])
-    tx = M + (lsize + geom["logo_gap"] if geom["title_beside_logo"] else 0)
-    ty = geom["title_y"] if geom["title_beside_logo"] else geom["logo_y"] + lsize + geom["logo_gap"]
-    d.text((tx, ty), geom["title"], font=f_title, fill=ink)
-    sub_y = ty + geom["title_size"] + geom["title_sub_gap"]
-    d.text((tx if geom["title_beside_logo"] else M, sub_y), geom["subtitle"], font=f_sub, fill=sub)
-    assert geom["title_sub_gap"] >= 8, "title/subtitle gap too tight"
+    f_title, f_sub = font(27, True), font(12)
+    title = "Fairy Floss"
+    d.text(((W - text_w(d, title, f_title)) // 2, 92), title, font=f_title, fill=INK)
+    sub = "A soft pastel Chrome theme"
+    d.text(((W - text_w(d, sub, f_sub)) // 2, 126), sub, font=f_sub, fill=lerp(INK, bg, 0.32))
 
-    f_chip = font(geom["chip_size"])
-    cx, cy = (tx if geom["title_beside_logo"] else M), sub_y + geom["sub_size"] + geom["chip_gap"]
-    for label in geom["chips"]:
-        w = draw_chip(d, cx, cy, geom["chip_h"], label, f_chip, chip_bg, ink)
-        cx += w + geom["chip_gap_x"]
-    assert cx - geom["chip_gap_x"] <= RIGHT, "chip row overflows the right margin"
+    # six dots; a soft shadow keeps the palest ones readable on the cream page
+    dots = [
+        rgb(_C["button_background"]), rgb(_C["button_background_secondary"]),
+        hex2rgb("#FFFDF6"), bg, rgb(_C["frame"]), rgb(_C["toolbar"]),
+    ]
+    r, gap = 11, 12
+    total = len(dots) * 2 * r + (len(dots) - 1) * gap
+    x0 = (W - total) // 2
+    y0 = 158
+    shadow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    for i in range(len(dots)):
+        cx = x0 + i * (2 * r + gap) + r
+        sd.ellipse([cx - r, y0 - r + 3, cx + r, y0 + r + 3], fill=INK + (34,))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(4))
+    img = Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB")
+    d = ImageDraw.Draw(img)
+    for i, col in enumerate(dots):
+        cx = x0 + i * (2 * r + gap) + r
+        d.ellipse([cx - r, y0 - r, cx + r, y0 + r], fill=col)
+    assert x0 >= M and x0 + total <= W - M, "dot row overflows"
 
-    f_cta = font(geom["cta_size"], True)
-    btn_w, btn_h = geom["cta_w"], geom["cta_h"]
-    btn_x = (RIGHT - btn_w) if geom.get("cta_right") else M
-    btn_y = geom["cta_y"] if geom["cta_beside"] else cy + geom["chip_h"] + geom["cta_gap"]
-    d.rounded_rectangle([btn_x, btn_y, btn_x + btn_w, btn_y + btn_h], radius=btn_h // 2, fill=cta_bg)
-    tw = text_w(d, geom["cta"], f_cta)
-    d.text((btn_x + (btn_w - tw) // 2, btn_y + (btn_h - f_cta.size) // 2 - 3),
-           geom["cta"], font=f_cta, fill=cta_txt)
-    assert btn_y + btn_h <= H - 12, "CTA button too close to the canvas bottom"
-    assert btn_x + btn_w <= RIGHT, "CTA button overflows the right margin"
-    return img, {"btn": (btn_x, btn_y, btn_w, btn_h),
-                 "blocks": (M, row_y, RIGHT - M, row_h)}
-
-
-LARGE = {
-    "margin": 70,
-    "logo": 104, "logo_y": 82, "logo_gap": 26, "title_beside_logo": True,
-    "title": "Fairy Floss", "title_size": 58, "title_y": 98,
-    "title_sub_gap": 14, "subtitle": "A soft pastel Chrome theme", "sub_size": 21,
-    "chips": ["Solid colors", "Pastel palette", "Easy on the eyes"],
-    "chip_size": 15, "chip_h": 34, "chip_gap": 34, "chip_gap_x": 12,
-    "cta": "Try It Now", "cta_size": 20, "cta_w": 210, "cta_h": 54,
-    "cta_y": 225, "cta_beside": True, "cta_right": True,
-    "row_y": 330, "row_h": 170, "row_gap": 18,
-}
-
-SMALL = {
-    "margin": 28,
-    "logo": 46, "logo_y": 22, "logo_gap": 10, "title_beside_logo": False,
-    "title": "Fairy Floss", "title_size": 26, "title_y": 0,
-    "title_sub_gap": 8, "subtitle": "A soft pastel Chrome theme", "sub_size": 12,
-    "chips": ["Solid colors", "Pastel palette"],
-    "chip_size": 10, "chip_h": 22, "chip_gap": 12, "chip_gap_x": 8,
-    "cta": "Try It Now", "cta_size": 13, "cta_w": 118, "cta_h": 36,
-    "cta_y": 136, "cta_gap": 16, "cta_beside": True, "cta_right": True,
-    "row_y": 224, "row_h": 40, "row_gap": 7,
-}
+    f_cta = font(13, True)
+    cw, ch = 128, 34
+    bx, by = (W - cw) // 2, 196
+    d.rounded_rectangle([bx, by, bx + cw, by + ch], radius=ch // 2, fill=INK)
+    label = "Try It Now"
+    d.text((bx + (cw - text_w(d, label, f_cta)) // 2, by + (ch - f_cta.size) // 2 - 3),
+           label, font=f_cta, fill=SHELL)
+    assert by + ch <= H - M, "CTA too close to the bottom"
+    return img, {"cta": (bx, by, cw, ch), "dots": (x0, y0 - r, total, 2 * r)}
 
 
 def main():
-    with open("manifest.json", "r", encoding="utf-8") as f:
-        data = json.load(f)
-        c = data["theme"]["colors"]
-        p = data["theme"]["properties"]
     os.makedirs(OUT_DIR, exist_ok=True)
-    for size, geom in (((1400, 560), LARGE), ((440, 280), SMALL)):
-        img, boxes = compose(size, geom, c, p)
-        out = "%s/%dx%d.png" % (OUT_DIR, size[0], size[1])
+    for compose, name in ((compose_bands, "1400x560.png"), (compose_dots, "440x280.png")):
+        img, boxes = compose()
+        out = "%s/%s" % (OUT_DIR, name)
         save_png(img, out)
-        print("saved:", out, img.size, img.mode, "cta:", boxes["btn"], "blocks:", boxes["blocks"])
+        print("saved:", out, img.size, img.mode, boxes)
 
 
 if __name__ == "__main__":
