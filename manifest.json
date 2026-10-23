@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Fairy Floss Theme",
+  "version": "1.0.0",
+  "description": "A soft pastel Chrome theme in candy pink, lavender, sky blue and mint — sweet, airy, and easy on the eyes.",
+  "icons": {
+    "128": "logo/logo.png"
+  },
+  "theme": {
+    "colors": {
+      "frame":                        [247, 220, 232],
+      "frame_inactive":               [250, 232, 240],
+      "toolbar":                      [232, 203, 240],
+      "tab_text":                     [34, 48, 58],
+      "bookmark_text":                [34, 48, 58],
+      "ntp_background":               [247, 239, 228],
+      "ntp_text":                     [34, 48, 58],
+      "ntp_link":                     [58, 111, 158],
+      "ntp_header":                   [232, 203, 240],
+      "button_background":            [168, 205, 236],
+      "button_background_secondary":  [190, 227, 188],
+      "omnibox_background":           [255, 255, 255],
+      "omnibox_text":                 [34, 48, 58],
+      "toolbar_button_icon":          [34, 48, 58]
+    },
+    "properties": {
+      "ntp_button_background":    [232, 203, 240],
+      "ntp_button_hover":         [222, 190, 232],
+      "ntp_logo_alternate":       1,
+      "ntp_single_row_shortcuts": true
+    },
+    "color_scheme": "light",
+    "default_color_scheme": "light"
+  }
+}
